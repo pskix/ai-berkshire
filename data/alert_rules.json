@@ -1,0 +1,56 @@
+{
+  "_说明": "价格监控规则。价格线来自 实盘记录/卖出条件.md，是自己冷静时写下的规则，脚本只做机械比对，不产生投资建议。",
+  "_重要": "卖出条件.md 原文强调『利润变化时按规则重算价格线，不锚定价格本身』。每次季报后必须回来重算这里的 price，否则监控的是过期的线。",
+  "_代码格式": "腾讯行情格式：A股 sh600519/sz000001，港股 hk00700，美股 usPDD（不加 .OQ 后缀）。",
+  "_类型": {
+    "sell_absurd": "估值离谱线 — 触发后按『你还愿意按这个价买下整个公司吗』重答",
+    "sell_review": "触发重审 — 不等于卖出，是强制重新检视论文",
+    "buy_zone": "买入区间 — 价格进入自己预设的区间，去复核论文与仓位"
+  },
+  "rules": [
+    {
+      "name": "腾讯控股",
+      "code": "hk00700",
+      "type": "sell_absurd",
+      "condition": "above",
+      "price": 1100,
+      "currency": "HKD",
+      "note": "估值离谱线：主业 Non-IFRS PE 35 倍（市值先剔投资组合再算主业口径）",
+      "ref": "实盘记录/卖出条件.md"
+    },
+    {
+      "name": "美团-W",
+      "code": "hk03690",
+      "type": "sell_absurd",
+      "condition": "above",
+      "price": 240,
+      "currency": "HKD",
+      "note": "估值离谱线：市值 1.5 万亿港元，且利润中枢未同步上修",
+      "ref": "实盘记录/卖出条件.md"
+    },
+    {
+      "name": "拼多多",
+      "code": "usPDD",
+      "type": "sell_absurd",
+      "condition": "above",
+      "price": 250,
+      "currency": "USD",
+      "note": "估值离谱线：剔现金 PE 20 倍（约千亿利润 + 四千亿现金折算）",
+      "ref": "实盘记录/卖出条件.md"
+    },
+    {
+      "name": "拼多多",
+      "code": "usPDD",
+      "type": "sell_review",
+      "condition": "above",
+      "price": 200,
+      "currency": "USD",
+      "note": "重估区：剔现金 PE 15 倍",
+      "ref": "实盘记录/卖出条件.md"
+    }
+  ],
+  "_待补": [
+    "MiniMax（hk00100）：卖出条件.md 已建条款，价格线待补",
+    "华泰 A股账户为新户空仓：完成 筛选→深研→买入区间 后，在此追加 buy_zone 规则"
+  ]
+}

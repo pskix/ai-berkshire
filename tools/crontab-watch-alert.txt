@@ -1,0 +1,23 @@
+# ai-berkshire 价格线监控 — crontab 配置
+#
+# 本机时区：Asia/Tokyo(JST)，下面的时间都是 JST。
+# 安装：  crontab tools/crontab-watch-alert.txt      （会覆盖现有 crontab！）
+# 追加：  (crontab -l 2>/dev/null; cat tools/crontab-watch-alert.txt) | crontab -
+# 查看：  crontab -l
+# 卸载：  crontab -r
+#
+# ⚠️ macOS 首次运行会弹权限窗口（cron 需要"完全磁盘访问权限"才能读 repo 目录）：
+#    系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 添加 /usr/sbin/cron
+# ⚠️ 只在 Mac 开机且未休眠时才会执行。合盖睡眠期间的任务不会补跑。
+# ⚠️ 触发提醒只在"未触发 → 触发"的跳变时推送，不会天天刷屏。
+
+# 收盘后检查（周一至周五 17:22 JST）
+#   = A股 15:00 CST 收盘后 / 港股 16:00 CST 收盘后
+22 17 * * 1-5 cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/watch_alert.py >> local/watch_alert.log 2>&1
+
+# 美股收盘后检查（周二至周六 06:22 JST，对应美股前一交易日收盘）
+#   夏令时美股 16:00 ET = 05:00 JST；冬令时 = 06:00 JST，取 06:22 两边都覆盖
+22 6 * * 2-6 cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/watch_alert.py >> local/watch_alert.log 2>&1
+
+# 每周一次全量摘要（周五 17:32 JST，无论是否触发都推一份现价 vs 价格线对照）
+32 17 * * 5 cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/watch_alert.py --always >> local/watch_alert.log 2>&1
