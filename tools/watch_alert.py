@@ -32,7 +32,8 @@ _STATE = os.path.join(_ROOT, "local", "alert_state.json")
 _TYPE_LABEL = {
     "sell_absurd": ("🔴", "估值离谱线"),
     "sell_review": ("🟡", "触发重审"),
-    "buy_zone": ("🟢", "进入买入区间"),
+    "buy_zone": ("🟢", "进入30%安全边际线"),
+    "scenario_low": ("🔵", "触及悲观情景价"),
 }
 
 
