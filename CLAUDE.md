@@ -3,7 +3,7 @@
 ## 项目概述
 
 基于 Claude Code 的价值投资研究 Skill 合集。四大师框架：巴菲特、芒格、段永平、李录。
-GitHub: xbtlin/ai-berkshire
+GitHub: pskix/ai-berkshire（推送目标）｜公开仓库/文档中的 clone 地址为 xbtlin/ai-berkshire
 
 ## 项目结构
 
@@ -86,8 +86,9 @@ reports/{公司名}/
 
 ## GitHub 操作
 
-- 本地克隆路径：`~/ai-berkshire/`
-- 远程仓库：`https://github.com/xbtlin/ai-berkshire.git`
+- 本地克隆路径：`~/workspace/skixinc/ai-berkshire/`
+- 远程仓库（origin）：`https://github.com/pskix/ai-berkshire.git`
+  - README/LICENSE/star-history 里的 `xbtlin/ai-berkshire` 是对外公开的 clone 地址，**不是**推送目标，勿改
 - 推送前先 `git pull --rebase origin main`（远程经常有新提交）
 - commit message 用中文，描述清楚改了什么
 - 不要推送中间过程文件（如 data_collection.md），只推最终报告
@@ -96,7 +97,7 @@ reports/{公司名}/
 
 ```bash
 # 推送报告到GitHub
-cd ~/ai-berkshire
+cd ~/workspace/skixinc/ai-berkshire
 git add reports/xxx.md
 git commit -m "添加xxx报告"
 git pull --rebase origin main
