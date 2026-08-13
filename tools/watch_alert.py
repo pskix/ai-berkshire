@@ -5,6 +5,8 @@
 - 只做**机械比对**：规则是自己在 实盘记录/卖出条件.md 里冷静写下的，脚本不产生投资建议。
 - **无事不打扰**：只有规则从"未触发"变为"触发"时才推送；同一条规则不会天天刷屏。
 - 触发 ≠ 卖出：sell_review 是强制重审，sell_absurd 是重答"还愿意按这个价买下整个公司吗"。
+- **沉默必须可信**：取数失败会重试 3 次；若仍有 ≥50% 规则查不成，则判定"检查不能"并推送告警——
+  因为此时的"无触发"不代表没异常，只代表没查成。健康度同样只在跳变时通知，不会天天刷屏。
 
 用法：
     python3 tools/watch_alert.py                # 检查并推送（cron 用这个）
@@ -21,9 +23,13 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 _TIMEOUT = 15
+_RETRY_ATTEMPTS = 3          # 取数失败重试次数（网络瞬断、行情源抖动）
+_RETRY_DELAY = 2.0           # 重试间隔基数（秒），按次数线性退避
+_DEGRADED_RATIO = 0.5        # 失败比例达到此值即判定"检查不能"
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RULES = os.path.join(_ROOT, "data", "alert_rules.json")
 _WEBHOOK_FILE = os.path.join(_ROOT, "local", "slack_webhook.txt")
@@ -82,6 +88,22 @@ def fetch_quote(code: str) -> dict:
         "time": f[30],
         "change_pct": f[32],
     }
+
+
+def fetch_quote_retry(code: str, attempts: int = _RETRY_ATTEMPTS) -> dict:
+    """带重试的取数。网络瞬断/行情源抖动是最常见的失败原因，重试即可恢复。
+
+    只有 attempts 次全部失败才向上抛，由调用方计入 errors。
+    """
+    last = None
+    for i in range(attempts):
+        try:
+            return fetch_quote(code)
+        except Exception as exc:                          # noqa: BLE001 — 交由重试与上层处理
+            last = exc
+            if i < attempts - 1:
+                time.sleep(_RETRY_DELAY * (i + 1))
+    raise last
 
 
 def evaluate(rule: dict, quote: dict) -> bool:
@@ -149,7 +171,7 @@ def check(dry_run=False, always=False) -> int:
         code = rule["code"]
         if code not in quotes:
             try:
-                quotes[code] = fetch_quote(code)
+                quotes[code] = fetch_quote_retry(code)
             except Exception as exc:                      # noqa: BLE001 — 单只失败不应中断整轮
                 errors.append(f"{rule['name']}({code}): {exc}")
                 continue
@@ -182,28 +204,66 @@ def check(dry_run=False, always=False) -> int:
     for err in errors:
         print(f"❌ {err}")
 
+    # ---- 健康度判定：区分"检查后无异常"与"根本没检查成" ----
+    total = len(rules)
+    evaluated = len(lines)
+    failed = total - evaluated
+    degraded = total > 0 and (evaluated == 0 or failed / total >= _DEGRADED_RATIO)
+
+    health = state.get("_health", {})
+    was_degraded = health.get("degraded", False)
+
     msg = None
     if fired:
         msg = (f"*价格线触发提醒* · {stamp}\n\n" + "\n\n".join(fired) +
                "\n\n_触发 ≠ 卖出。请回 repo 重审论文后再决定。_")
     elif always:
         msg = f"*每日价格摘要* · {stamp}\n```\n" + "\n".join(lines) + "\n```"
-    if errors and (fired or always):
+    if errors and msg:
         msg += "\n\n⚠️ 取数失败：\n" + "\n".join(f"· {e}" for e in errors)
 
-    if msg and not dry_run:
-        post_slack(msg) and print("✅ 已推送 Slack")
-    elif msg:
-        print(f"\n--- dry-run 预览 ---\n{msg}")
+    # 健康度只在跳变时通知，避免长时间断网天天刷屏（与"无事不打扰"一致）
+    health_msg = None
+    if degraded and not was_degraded:
+        health_msg = (f"⚠️ *价格监控：检查不能* · {stamp}\n"
+                      f"{total} 条规则中 {failed} 条取数失败（已重试 {_RETRY_ATTEMPTS} 次）。\n"
+                      f"*本轮的「无触发」不可信——不是没异常，是没查成。*\n\n"
+                      + "\n".join(f"· {e}" for e in errors[:10])
+                      + ("\n· …" if len(errors) > 10 else "")
+                      + "\n\n_恢复后会再推一条通知。_")
+    elif was_degraded and not degraded:
+        health_msg = (f"✅ *价格监控：已恢复* · {stamp}\n"
+                      f"{total} 条规则全部取数成功，监控恢复正常。")
+
+    if degraded != was_degraded:
+        health = {"degraded": degraded,
+                  "since": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                  "failed": failed, "total": total}
     else:
-        print(f"\n无触发（{stamp}）— 不打扰")
+        health.setdefault("degraded", degraded)
+        health["failed"], health["total"] = failed, total
+    state["_health"] = health
+
+    for out in (health_msg, msg):
+        if not out:
+            continue
+        if dry_run:
+            print(f"\n--- dry-run 预览 ---\n{out}")
+        elif post_slack(out):
+            print("✅ 已推送 Slack")
+
+    if not (msg or health_msg):
+        if degraded:
+            print(f"\n⚠️ 检查不能（{stamp}）— {failed}/{total} 条取数失败，且已通知过，不重复打扰")
+        else:
+            print(f"\n无触发（{stamp}）— 不打扰")
 
     if not dry_run:
         os.makedirs(os.path.dirname(_STATE), exist_ok=True)
         with open(_STATE, "w", encoding="utf-8") as fh:
             json.dump(state, fh, ensure_ascii=False, indent=2)
 
-    return 1 if errors and not quotes else 0
+    return 1 if degraded else 0
 
 
 def main():
@@ -218,6 +278,8 @@ def main():
         ok = post_slack(f"✅ ai-berkshire 价格监控通道测试 · "
                         f"{datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
                         f"_收到这条说明 webhook 正常，后续只在规则触发时才会打扰你。_")
+        # 成功时也要出声：静默成功会让人误以为脚本没跑
+        print("✅ 测试消息已发送，请到 Slack 确认是否收到" if ok else "❌ 测试消息发送失败")
         return 0 if ok else 1
     return check(dry_run=args.dry_run, always=args.always)
 

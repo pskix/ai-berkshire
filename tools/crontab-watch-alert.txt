@@ -21,3 +21,10 @@
 
 # 每周一次全量摘要（周五 17:32 JST，无论是否触发都推一份现价 vs 价格线对照）
 32 17 * * 5 cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/watch_alert.py --always >> local/watch_alert.log 2>&1
+
+# ── 持仓硬事件监控（分层监控第一层）────────────────────────────────
+# 每天 08:05 JST 扫一次新闻，命中卖出条款关键词才推送。
+# 只盯新闻可检测的硬事件（离任/立案/诉讼判决/并购/稀释融资）；
+# 财务类条款（利润连续两季下滑等）季度才更新，不在日频扫描，留给财报后的全量复核。
+# ⚠️ 命中 ≠ 触发：脚本只把候选新闻与条款原文摆在一起，判断权在人。
+5 8 * * * cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/news_watch.py >> local/news_watch.log 2>&1
