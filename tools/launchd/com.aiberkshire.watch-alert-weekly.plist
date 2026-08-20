@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.aiberkshire.watch-alert-weekly</string>
+  <key>ProgramArguments</key>
+  <array><string>/opt/homebrew/bin/python3</string><string>/Users/chongpang/workspace/skixinc/ai-berkshire/tools/watch_alert.py</string><string>--always</string></array>
+  <key>WorkingDirectory</key><string>/Users/chongpang/workspace/skixinc/ai-berkshire</string>
+  <key>StandardOutPath</key><string>/Users/chongpang/workspace/skixinc/ai-berkshire/local/watch_alert.log</string>
+  <key>StandardErrorPath</key><string>/Users/chongpang/workspace/skixinc/ai-berkshire/local/watch_alert.log</string>
+  <key>StartCalendarInterval</key>
+  <array><dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>17</integer><key>Minute</key><integer>32</integer></dict></array>
+</dict>
+</plist>

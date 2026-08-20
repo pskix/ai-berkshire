@@ -39,6 +39,9 @@ _WEBHOOK_FILE = os.path.join(_ROOT, "local", "slack_webhook.txt")
 _STATE = os.path.join(_ROOT, "local", "news_state.json")
 _MAX_PUSH = 12          # 单次推送条数上限，超出只报数量，避免刷屏
 
+_ANNOUNCE = ("https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=30"
+             "&page_index=1&ann_type=A&client_source=web&stock_list={code}&f_node=0&s_node=0")
+
 _SEARCH = ("https://search-api-web.eastmoney.com/search/jsonp?cb=x&param="
            "%7B%22uid%22%3A%22%22%2C%22keyword%22%3A%22{kw}%22%2C%22type%22%3A%5B%22cmsArticleWebOld%22"
            "%5D%2C%22client%22%3A%22web%22%2C%22clientType%22%3A%22web%22%2C%22clientVersion%22%3A%22curr%22"
@@ -138,6 +141,49 @@ def within_days(date_str: str, days: int) -> bool:
     return True          # 日期解析不了就保留，宁可多看一条
 
 
+def fetch_announcements(code: str) -> list:
+    """取法定公告。硬事件（离任/并购/立案/分红变更）法定必须在此披露，
+    比新闻检索精准得多——实测新闻检索对大盘股几乎全是 ETF/指数定型文。
+
+    返回 [{date,title,url,cats,id}]，cats 为交易所官方分类（columns[].column_name）。
+    """
+    last = None
+    for i in range(_RETRY_ATTEMPTS):
+        try:
+            raw = _curl(_ANNOUNCE.format(code=code))
+            lst = (json.loads(raw).get("data") or {}).get("list") or []
+            out = []
+            for a in lst:
+                cats = [c.get("column_name", "") for c in (a.get("columns") or [])]
+                out.append({"date": (a.get("notice_date") or "")[:10],
+                            "title": a.get("title", ""), "cats": cats,
+                            "id": a.get("art_code", ""),
+                            "url": f"https://data.eastmoney.com/notices/detail/{code}/{a.get('art_code','')}.html"})
+            return out
+        except Exception as exc:                              # noqa: BLE001
+            last = exc
+            if i < _RETRY_ATTEMPTS - 1:
+                time.sleep(_RETRY_DELAY * (i + 1))
+    raise last
+
+
+def classify_announcement(cats: list, cfg: dict) -> tuple:
+    """按官方分类判优先级。返回 (等级, 对应的卖出条款说明)。
+    未知分类按【中】处理——漏报的代价高于多推一条。
+    """
+    ac = cfg.get("_公告监控") or {}
+    high, mid, low = ac.get("高_直连卖出条款", {}), ac.get("中_内容次第需人工看", []), ac.get("低_噪音不通知", [])
+    for c in cats:
+        if c in high:
+            return ("高", high[c])
+    if cats and all(c in low for c in cats):
+        return ("低", "")
+    for c in cats:
+        if c in mid:
+            return ("中", "内容次第，需人工过目")
+    return ("中", "未知分类，保守通知")
+
+
 def match_clauses(item: dict, watch: dict) -> list:
     """匹配规则（实测降噪后）：
     1. **别名必须出现在标题里** —— 真正关于该公司的新闻几乎都会在标题点名；
@@ -165,8 +211,31 @@ def scan(dry_run=False, days=2, ignore_state=False) -> int:
 
     state = load_json(_STATE, {})
     seen = set(state.get("seen_ids", []))
-    found, errors = [], []
+    found, errors, anns = [], [], []
 
+    # ---- 通道一：法定公告（高信噪比，优先）----
+    for w in watches:
+        code = (w.get("code") or "").replace("sh", "").replace("sz", "")
+        if not code:
+            continue
+        try:
+            items = fetch_announcements(code)
+        except Exception as exc:                              # noqa: BLE001
+            errors.append(f"{w['name']} 公告: {exc}")
+            continue
+        for a in items:
+            if not within_days(a["date"], days):
+                continue
+            if not ignore_state and a["id"] in seen:
+                continue
+            level, clause = classify_announcement(a["cats"], cfg)
+            if level == "低":                                  # 调研活动等定型文不打扰
+                continue
+            anns.append({"name": w["name"], "level": level, "clause": clause, "a": a})
+            seen.add(a["id"])
+        time.sleep(0.3)
+
+    # ---- 通道二：新闻检索（低信噪比，作补充）----
     for w in watches:
         try:
             items = search_news(w["aliases"][0])
@@ -187,6 +256,13 @@ def scan(dry_run=False, days=2, ignore_state=False) -> int:
         time.sleep(0.3)
 
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    anns.sort(key=lambda x: (x["level"] != "高", x["a"]["date"]), reverse=False)
+    for x in anns:
+        print(f"\n📄 [{x['level']}] {x['name']}｜{x['a']['date']}｜{'/'.join(x['a']['cats']) or '未分类'}")
+        print(f"   {x['a']['title']}")
+        if x["clause"]:
+            print(f"   ▸ 对应条款：{x['clause']}")
+        print(f"   {x['a']['url']}")
     for f in found:
         print(f"\n🔎 {f['name']}｜{f['item']['date']}｜{f['item']['media']}")
         print(f"   {f['item']['title']}")
@@ -198,7 +274,15 @@ def scan(dry_run=False, days=2, ignore_state=False) -> int:
         print(f"❌ {e}")
 
     msg = None
-    if found:
+    ann_blocks = []
+    for x in anns[:_MAX_PUSH]:
+        b = [f"{'🔴' if x['level']=='高' else '🟡'} *[{x['level']}] {x['name']}*｜{x['a']['date']}"
+             f"｜`{'/'.join(x['a']['cats']) or '未分类'}`",
+             f"<{x['a']['url']}|{x['a']['title']}>"]
+        if x["clause"]:
+            b.append(f"    ▸ 对应条款：{x['clause']}")
+        ann_blocks.append("\n".join(b))
+    if found or ann_blocks:
         blocks = []
         for f in found[:_MAX_PUSH]:
             lines = [f"*{f['name']}*｜{f['item']['date']}｜{f['item']['media']}",
@@ -207,11 +291,15 @@ def scan(dry_run=False, days=2, ignore_state=False) -> int:
                 lines.append(f"    ▸ *[{h['type']}]* 命中关键词 `{'`, `'.join(h['kw'])}`")
                 lines.append(f"    ▸ 条款原文：{h['text']}")
             blocks.append("\n".join(lines))
-        more = f"\n\n_（另有 {len(found) - _MAX_PUSH} 条未列出）_" if len(found) > _MAX_PUSH else ""
-        msg = (f"*持仓硬事件候选* · {stamp}\n"
-               f"_以下为关键词机械匹配的候选新闻，**命中 ≠ 触发**。_\n"
-               f"_请自行核对 `reports/` 下对应研究报告的观察指标后判断；脚本不给结论。_\n\n"
-               + "\n\n".join(blocks) + more)
+        more = f"\n\n_（新闻另有 {len(found) - _MAX_PUSH} 条未列出）_" if len(found) > _MAX_PUSH else ""
+        parts = [f"*持仓硬事件候选* · {stamp}",
+                 "_**命中 ≠ 触发**。请自行核对 `reports/` 下研究报告的观察指标与 "
+                 "`docs/卖出条件.md` 后判断；脚本不给结论。_"]
+        if ann_blocks:
+            parts.append("*── 法定公告 ──*\n" + "\n\n".join(ann_blocks))
+        if blocks:
+            parts.append("*── 新闻检索（信噪比低，仅作补充）──*\n" + "\n\n".join(blocks) + more)
+        msg = "\n\n".join(parts)
     if errors and msg:
         msg += "\n\n⚠️ 取数失败：\n" + "\n".join(f"· {e}" for e in errors)
 
@@ -220,7 +308,7 @@ def scan(dry_run=False, days=2, ignore_state=False) -> int:
     elif msg:
         print(f"\n--- dry-run 预览 ---\n{msg}")
     else:
-        print(f"\n无命中（{stamp}）— 不打扰")
+        print(f"\n无命中（{stamp}）— 公告与新闻均无可报项，不打扰")
 
     if not dry_run:
         os.makedirs(os.path.dirname(_STATE), exist_ok=True)
@@ -229,7 +317,7 @@ def scan(dry_run=False, days=2, ignore_state=False) -> int:
         with open(_STATE, "w", encoding="utf-8") as fh:
             json.dump(state, fh, ensure_ascii=False, indent=2)
 
-    return 1 if errors and not found else 0
+    return 1 if errors and not (found or anns) else 0
 
 
 def main():

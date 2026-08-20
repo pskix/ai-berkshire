@@ -1,30 +1,44 @@
-# ai-berkshire 价格线监控 — crontab 配置
+# ⚠️ 2026-08-20 このファイルは【廃止】。launchd に移行しました → tools/launchd/
 #
-# 本机时区：Asia/Tokyo(JST)，下面的时间都是 JST。
-# 安装：  crontab tools/crontab-watch-alert.txt      （会覆盖现有 crontab！）
-# 追加：  (crontab -l 2>/dev/null; cat tools/crontab-watch-alert.txt) | crontab -
-# 查看：  crontab -l
-# 卸载：  crontab -r
+# 廃止理由：cron はスリープ中に過ぎた予定を補跑しない。
+#   2026-08-15（土）Mac がバッテリー待機で休眠し、06:22 の価格線チェックと
+#   08:05 のニュース/公告チェックが両方飛んだ。しかも当時の死活監視は
+#   「動いたが取得失敗」しか検知できず、「動かなかった」ことは誰も気づけなかった。
+#   launchd の StartCalendarInterval は復帰時に実行するため、この穴が塞がる。
 #
-# ⚠️ macOS 首次运行会弹权限窗口（cron 需要"完全磁盘访问权限"才能读 repo 目录）：
-#    系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 添加 /usr/sbin/cron
-# ⚠️ 只在 Mac 开机且未休眠时才会执行。合盖睡眠期间的任务不会补跑。
-# ⚠️ 触发提醒只在"未触发 → 触发"的跳变时推送，不会天天刷屏。
-
-# 收盘后检查（周一至周五 17:22 JST）
-#   = A股 15:00 CST 收盘后 / 港股 16:00 CST 收盘后
-22 17 * * 1-5 cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/watch_alert.py >> local/watch_alert.log 2>&1
-
-# 美股收盘后检查（周二至周六 06:22 JST，对应美股前一交易日收盘）
-#   夏令时美股 16:00 ET = 05:00 JST；冬令时 = 06:00 JST，取 06:22 两边都覆盖
-22 6 * * 2-6 cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/watch_alert.py >> local/watch_alert.log 2>&1
-
-# 每周一次全量摘要（周五 17:32 JST，无论是否触发都推一份现价 vs 价格线对照）
-32 17 * * 5 cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/watch_alert.py --always >> local/watch_alert.log 2>&1
-
-# ── 持仓硬事件监控（分层监控第一层）────────────────────────────────
-# 每天 08:05 JST 扫一次新闻，命中卖出条款关键词才推送。
-# 只盯新闻可检测的硬事件（离任/立案/诉讼判决/并购/稀释融资）；
-# 财务类条款（利润连续两季下滑等）季度才更新，不在日频扫描，留给财报后的全量复核。
-# ⚠️ 命中 ≠ 触发：脚本只把候选新闻与条款原文摆在一起，判断权在人。
-5 8 * * * cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/news_watch.py >> local/news_watch.log 2>&1
+# 導入：  cp tools/launchd/*.plist ~/Library/LaunchAgents/
+#        launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.aiberkshire.*.plist
+# 確認：  launchctl list | grep aiberkshire
+# 即時実行：launchctl kickstart -k gui/$UID/com.aiberkshire.watch-alert
+#
+# 以下は旧 cron 設定（参考、使用しない）
+# # ai-berkshire 价格线监控 — crontab 配置
+# #
+# # 本机时区：Asia/Tokyo(JST)，下面的时间都是 JST。
+# # 安装：  crontab tools/crontab-watch-alert.txt      （会覆盖现有 crontab！）
+# # 追加：  (crontab -l 2>/dev/null; cat tools/crontab-watch-alert.txt) | crontab -
+# # 查看：  crontab -l
+# # 卸载：  crontab -r
+# #
+# # ⚠️ macOS 首次运行会弹权限窗口（cron 需要"完全磁盘访问权限"才能读 repo 目录）：
+# #    系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 添加 /usr/sbin/cron
+# # ⚠️ 只在 Mac 开机且未休眠时才会执行。合盖睡眠期间的任务不会补跑。
+# # ⚠️ 触发提醒只在"未触发 → 触发"的跳变时推送，不会天天刷屏。
+# 
+# # 收盘后检查（周一至周五 17:22 JST）
+# #   = A股 15:00 CST 收盘后 / 港股 16:00 CST 收盘后
+# 22 17 * * 1-5 cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/watch_alert.py >> local/watch_alert.log 2>&1
+# 
+# # 美股收盘后检查（周二至周六 06:22 JST，对应美股前一交易日收盘）
+# #   夏令时美股 16:00 ET = 05:00 JST；冬令时 = 06:00 JST，取 06:22 两边都覆盖
+# 22 6 * * 2-6 cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/watch_alert.py >> local/watch_alert.log 2>&1
+# 
+# # 每周一次全量摘要（周五 17:32 JST，无论是否触发都推一份现价 vs 价格线对照）
+# 32 17 * * 5 cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/watch_alert.py --always >> local/watch_alert.log 2>&1
+# 
+# # ── 持仓硬事件监控（分层监控第一层）────────────────────────────────
+# # 每天 08:05 JST 扫一次新闻，命中卖出条款关键词才推送。
+# # 只盯新闻可检测的硬事件（离任/立案/诉讼判决/并购/稀释融资）；
+# # 财务类条款（利润连续两季下滑等）季度才更新，不在日频扫描，留给财报后的全量复核。
+# # ⚠️ 命中 ≠ 触发：脚本只把候选新闻与条款原文摆在一起，判断权在人。
+# 5 8 * * * cd /Users/chongpang/workspace/skixinc/ai-berkshire && /opt/homebrew/bin/python3 tools/news_watch.py >> local/news_watch.log 2>&1

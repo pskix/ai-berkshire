@@ -6,8 +6,13 @@
   脚本不产生投资建议。
 - **无事不打扰**：只有规则从"未触发"变为"触发"时才推送；同一条规则不会天天刷屏。
 - 触发 ≠ 卖出：sell_review 是强制重审，sell_absurd 是重答"还愿意按这个价买下整个公司吗"。
-- **沉默必须可信**：取数失败会重试 3 次；若仍有 ≥50% 规则查不成，则判定"检查不能"并推送告警——
-  因为此时的"无触发"不代表没异常，只代表没查成。健康度同样只在跳变时通知，不会天天刷屏。
+- **沉默必须可信**（两道）：
+  ① 取数失败重试 3 次；若仍有 ≥50% 规则查不成，判定"检查不能"并告警——
+     此时的"无触发"不代表没异常，只代表没查成。
+  ② 距上次运行超阈值则报"执行缺口"——由**下一次运行**回头补报。
+     背景：2026-08-15 Mac 电池待机休眠，cron 未执行且不补跑，无人知晓（①查不到"没跑"）。
+     已改用 launchd（见 tools/launchd/），其 StartCalendarInterval 会在唤醒后补执行。
+  两者均只在跳变/超阈值时通知，不会天天刷屏。
 
 用法：
     python3 tools/watch_alert.py                # 检查并推送（cron 用这个）
@@ -31,6 +36,9 @@ _TIMEOUT = 15
 _RETRY_ATTEMPTS = 3          # 取数失败重试次数（网络瞬断、行情源抖动）
 _RETRY_DELAY = 2.0           # 重试间隔基数（秒），按次数线性退避
 _DEGRADED_RATIO = 0.5        # 失败比例达到此值即判定"检查不能"
+_MAX_GAP_HOURS = 26.0        # 距上次运行超过此小时数即判定"执行缺口"
+                             # （最长正常间隔：周五17:22 → 周一17:22 之间靠周六06:22 兜底；
+                             #   周六06:22 → 周一17:22 约 59h，故周末需单独放宽，见下）
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RULES = os.path.join(_ROOT, "data", "alert_rules.json")
 _WEBHOOK_FILE = os.path.join(_ROOT, "local", "slack_webhook.txt")
@@ -223,6 +231,29 @@ def check(dry_run=False, always=False) -> int:
     if errors and msg:
         msg += "\n\n⚠️ 取数失败：\n" + "\n".join(f"· {e}" for e in errors)
 
+    # ---- 死活监测：本轮距上轮间隔是否异常（检测"根本没跑" ）----
+    # 背景：2026-08-15 Mac 电池待机休眠，cron 未执行且不补跑，直到人工翻日志才发现。
+    # 健康度只能发现"跑了但取不到数"，发现不了"没跑"。这里由**下一次运行**回头补报缺口。
+    now = datetime.now(timezone.utc)
+    gap_msg = None
+    prev_iso = state.get("_last_run")
+    if prev_iso:
+        try:
+            gap_h = (now - datetime.fromisoformat(prev_iso)).total_seconds() / 3600
+            # 周末正常会拉长（周六06:22 → 周一17:22 约 59h），按星期放宽阈值
+            limit = 62.0 if now.weekday() == 0 else _MAX_GAP_HOURS
+            if gap_h > limit:
+                gap_msg = (f"⚠️ *价格监控：检测到执行缺口* · {stamp}\n"
+                           f"距上次运行 *{gap_h:.1f} 小时*（本次阈值 {limit:.0f} 小时）。\n"
+                           f"上次运行：{prev_iso}\n"
+                           f"*期间的价格线未被检查过*——若正好有跳变触发，不会补报。\n"
+                           f"常见原因：Mac 休眠/关机（cron 不补跑，launchd 会）、"
+                           f"或 launchd 任务被卸载。")
+        except ValueError:
+            pass
+    if not dry_run:
+        state["_last_run"] = now.isoformat(timespec="seconds")
+
     # 健康度只在跳变时通知，避免长时间断网天天刷屏（与"无事不打扰"一致）
     health_msg = None
     if degraded and not was_degraded:
@@ -245,7 +276,7 @@ def check(dry_run=False, always=False) -> int:
         health["failed"], health["total"] = failed, total
     state["_health"] = health
 
-    for out in (health_msg, msg):
+    for out in (gap_msg, health_msg, msg):
         if not out:
             continue
         if dry_run:
@@ -253,7 +284,7 @@ def check(dry_run=False, always=False) -> int:
         elif post_slack(out):
             print("✅ 已推送 Slack")
 
-    if not (msg or health_msg):
+    if not (msg or health_msg or gap_msg):
         if degraded:
             print(f"\n⚠️ 检查不能（{stamp}）— {failed}/{total} 条取数失败，且已通知过，不重复打扰")
         else:

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.aiberkshire.news-watch</string>
+  <key>ProgramArguments</key>
+  <array><string>/opt/homebrew/bin/python3</string><string>/Users/chongpang/workspace/skixinc/ai-berkshire/tools/news_watch.py</string></array>
+  <key>WorkingDirectory</key><string>/Users/chongpang/workspace/skixinc/ai-berkshire</string>
+  <key>StandardOutPath</key><string>/Users/chongpang/workspace/skixinc/ai-berkshire/local/news_watch.log</string>
+  <key>StandardErrorPath</key><string>/Users/chongpang/workspace/skixinc/ai-berkshire/local/news_watch.log</string>
+  <key>StartCalendarInterval</key>
+  <array><dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>5</integer></dict></array>
+</dict>
+</plist>
