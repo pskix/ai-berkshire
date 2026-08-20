@@ -41,8 +41,75 @@ This skill is generated from `skills/financial-data.md` so Claude Code and Codex
 
 | 优先级 | 来源 | URL | 获取方式 |
 |--------|------|-----|---------|
-| 1（主） | **东方财富** | eastmoney.com → 搜股票代码 → 财务报表 | 直接访问 |
+| 1（主） | **东方财富** | eastmoney.com → 搜股票代码 → 财务报表 | 直接访问，或用下方接口 |
 | 2（副） | **巨潮资讯** | cninfo.com.cn | 原始年报/季报PDF |
+| 行情副源 | **腾讯行情** | qt.gtimg.cn | `tools/ashare_data.py`（零依赖） |
+
+#### 东方财富接口速查（2026-08 实测可用）
+
+批量筛选与逐日估值序列都能拿到，全部零依赖 curl 即可。**主机优先 `push2delay`——`push2` 对连续请求限流严，实测整轮批量拉取会超时。**
+
+| 用途 | 接口 | 备注 |
+|---|---|---|
+| 全市场批量行情+财务 | `push2delay.eastmoney.com/api/qt/clist/get` | `fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23` 覆盖沪深京 5,548 只；`pz=200` 分页 |
+| 单只快照 | `push2delay.eastmoney.com/api/qt/stock/get` | `secid=0.000538`（0=深 1=沪） |
+| **逐日 PE/PB/PS 历史** | `datacenter-web.eastmoney.com/api/data/v1/get` `reportName=RPT_VALUEANALYSIS_DET` | 约 2,088 个交易日（8.6 年），算估值分位用 |
+| 年报核心财务 | `datacenter.eastmoney.com/securities/api/data/get` `type=RPT_F10_FINANCE_MAINFINADATA&sty=ALL` | 含扣非、经营现金流、ROIC、总股本 |
+| **法定公告** | `np-anotice-stock.eastmoney.com/api/security/ann` | `columns[].column_name` 是交易所官方分类 |
+| 资讯检索 | `search-api-web.eastmoney.com/search/jsonp` | ⚠️ 大盘股信噪比极差，见下 |
+
+#### ⚠️ 陷阱一：同名字段在不同接口含义不同（必读）
+
+**这是本规范里最容易出错的一点。** 同一只伊利股份：
+
+| 字段 | `clist`（批量） | `stock/get`（单只） |
+|---|---|---|
+| `f173` | 涨跌相关（1.19） | **ROE = 9.44** |
+| `f184` | 涨跌相关（-5.94） | **营收同比 = 5.47%** |
+| `f186` / `f188` | **96% 为空** | 毛利率 / 资产负债率 |
+
+**批量接口的正确字段**（已用长江电力 f46=+30.50%、格力 f46=+3.01% 对报告原文逐项验证）：
+
+```
+f12=代码 f14=名称 f2=现价 f20=总市值 f23=PB f25=年初至今%
+f37=ROE  f40=营收 f41=营收同比% f45=净利 f46=净利同比%
+f49=毛利率 f57=资产负债率 f100=行业 f115=PE(TTM) f129=净利率 f130=PS
+f133=股息率 f221=报告期(如20260331)
+```
+
+**单只接口**：`f173=ROE f184=营收同比 f186=毛利率 f188=资产负债率`。
+
+→ **换接口就必须重新验证字段**。方法：取一只已有报告的公司，把接口返回值与报告原文逐项比对，全中才可信。
+
+#### ⚠️ 陷阱二：报告期混用会毁掉横向比较
+
+`f221` 是报告期。2026-08 实测全市场：**4,952 只为 20260331（一季报）、261 只已出中报（20260630）、334 只缺失**。中报口径的 ROE 约为一季报的两倍，混在一起排序会系统性偏袒早披露的公司。**筛选必须先按 `f221` 统一口径。**
+
+#### ⚠️ 陷阱三：分页静默截断会系统性高估估值分位
+
+`RPT_VALUEANALYSIS_DET` 要翻 5 页（`pageSize=500`）。实测中途一页取数失败、脚本 `break` 退出，只拿到 1,000 天就算分位——**云南白药 PE 分位由正确的 2.1% 变成 4.4%**。残缺的历史序列缺的是早年的高估值段，**必然把当前分位算高**。
+
+→ **取数函数必须"失败即抛错"，绝不返回残缺序列**；并校验实际行数 ≈ `pages × pageSize`。
+
+#### 估值分位工具的验证方法
+
+写完分位工具后，用**已有报告的已知结论**做反向验证，全中才可用：
+
+| 验证项 | 报告原值 | 实测 |
+|---|---|---|
+| 伊利 PE / PB / PS 分位（8.6y） | 5.4% / 3.6% / 14.4% | 5.4% / 3.5% / 14.3% ✅ |
+| 格力 PB 分位（8.6y） | 5.9% | 5.8% ✅ |
+| 格力 PE 分位（**近5年**） | 51.2% | 50.9% ✅ |
+
+⚠️ **窗口口径会实质改变结论**：格力 PE 在 8.6 年窗口是 30.2%，近 5 年窗口是 50.9%。**引用分位必须注明窗口**，本 repo 的既有报告混用过两种窗口。
+
+#### 新闻 vs 公告：大盘股必须用公告
+
+实测直近 7 日，`search-api-web` 关键词检索对云南白药/长江电力返回 30 篇，**社固有新闻 0 篇**——全是 ETF/指数成分股定型文、机构调研名单、两融数据、他公司报道中的顺带提及。
+
+硬事件（离任/并购/立案/分红变更）**法定必须在公告披露**，故应以 `np-anotice-stock` 为主。其 `columns[].column_name` 是官方分类，可直接分级：
+- 高信号：`高管人员任职变动` `重大资产重组` `关联交易` `立案调查` `监管措施` `分配预案` `权益变动` `月度经营情况`
+- 纯噪音：`调研活动`（直近 50 件中占 28 件，最大噪音源）、`独立董事*声明` `法律意见书` `内部控制报告` `ESG公告`
 
 ### 台股（台积电2330、联发科2454、大立光3008等）
 
@@ -165,3 +232,19 @@ python3 tools/twstock_data.py search 台積        # 搜索股票代码（注意
 | Capcom | macrotrends（CCOEY） | stockanalysis（CCOEY） |
 | 台积电 | tools/twstock_data.py（2330） | goodinfo.tw / macrotrends（TSM，注意1 ADR=5股） |
 | 联发科 | tools/twstock_data.py（2454） | goodinfo.tw |
+
+---
+
+## 本 repo 的取数工具
+
+| 工具 | 用途 | 备注 |
+|---|---|---|
+| `tools/ashare_data.py` | A股行情/年报/估值（腾讯行情+东财） | `quote` / `financials` / `valuation` / `search` |
+| `tools/twstock_data.py` | 台股（FinMind） | 输出自带市值验算 |
+| `tools/financial_rigor.py` | **市值验算/估值验算/三情景/精确计算** | 报告中的计算一律走它，禁止心算 |
+| `tools/report_audit.py` | 报告数字抽检（15% 随机） | 准出流程，`extract` → 人工取数 → `verdict` |
+| `tools/watch_alert.py` | 价格线监控 → Slack | 见 skill `ai-berkshire-ops` |
+| `tools/news_watch.py` | 公告+新闻监控 → Slack | 同上 |
+
+> `financial_rigor.py three-scenario` 的 `--growth` 收的是**小数**（0.105 = 10.5%），
+> 传 10.5 会被当成 1050%，得出荒谬的目标价。实测踩过。
